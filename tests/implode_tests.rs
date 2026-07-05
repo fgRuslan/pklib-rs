@@ -6,6 +6,15 @@
 use pklib::{explode_bytes, implode_bytes, CompressionMode, DictionarySize, ImplodeWriter};
 use std::io::Write;
 
+#[test]
+fn test_large_file_implode() {
+    let data = vec![0u8; 50_000]; // 50KB
+    let compressed =
+        pklib::implode_bytes(&data, CompressionMode::Binary, DictionarySize::Size4K).unwrap();
+    let decompressed = pklib::explode_bytes(&compressed).unwrap();
+    assert_eq!(data.len(), decompressed.len());
+}
+
 /// Test basic compression functionality
 #[test]
 fn test_basic_compression() -> Result<(), Box<dyn std::error::Error>> {

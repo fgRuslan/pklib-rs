@@ -80,58 +80,71 @@ impl<W: Write> ImplodeWriter<W> {
             self.initialize()?;
         }
 
-        // Move input data to work buffer
-        let input_len = self.input_buffer.len();
-        if input_len == 0 {
-            return Ok(());
-        }
+        // We take data without copying
+        let data = std::mem::take(&mut self.input_buffer);
+        let mut input_offset = 0;
 
-        // Ensure we have space in work buffer
-        let available_space = self.state.work_buff.len() - self.state.work_bytes;
-        let copy_len = input_len.min(available_space);
+        while input_offset < data.len() {
+            let dict_size = self.state.dsize_bytes as usize;
+            let remaining_input = data.len() - input_offset;
+            let available_space = self.state.work_buff.len() - self.state.work_bytes;
 
-        if copy_len > 0 {
-            self.state.work_buff[self.state.work_bytes..self.state.work_bytes + copy_len]
-                .copy_from_slice(&self.input_buffer[..copy_len]);
-            self.state.work_bytes += copy_len;
+            // If the buffer is filled and there's still input data we push the window to the left
+            if available_space == 0 && remaining_input > 0 {
+                if self.state.work_pos > dict_size {
+                    let shift = self.state.work_pos - dict_size;
+                    let remaining = self.state.work_bytes - shift;
 
-            // Remove processed data from input buffer
-            self.input_buffer.drain(..copy_len);
-        }
+                    self.state.work_buff.copy_within(shift..self.state.work_bytes, 0);
+                    self.state.work_bytes = remaining;
+                    self.state.work_pos -= shift;
+                } else {
+                    self.compress_buffer(true)?;
+                    self.state.work_bytes = 0;
+                    self.state.work_pos = 0;
+                }
+            }
 
-        // Build hash table for the current buffer
-        if self.state.work_bytes > 1 {
-            self.state.sort_buffer(0, self.state.work_bytes);
+            // Copy the data into the available space
+            let available_space = self.state.work_buff.len() - self.state.work_bytes;
+            if available_space > 0 {
+                let copy_len = remaining_input.min(available_space);
+                self.state.work_buff[self.state.work_bytes..self.state.work_bytes + copy_len]
+                    .copy_from_slice(&data[input_offset..input_offset + copy_len]);
+                self.state.work_bytes += copy_len;
+                input_offset += copy_len;
+            }
 
-            // Compress the data
-            self.compress_buffer()?;
+            // We create the hash table and compress everything apart from a 516 byte tail
+            if self.state.work_bytes > 1 {
+                self.state.sort_buffer(0, self.state.work_bytes);
+                self.compress_buffer(false)?;
+            }
         }
 
         Ok(())
     }
 
     /// Compress data in the work buffer
-    fn compress_buffer(&mut self) -> Result<()> {
-        let mut pos = 0;
+    fn compress_buffer(&mut self, is_final: bool) -> Result<()> {
+        // If it's the end of file, we compress everything till the last byte (work_bytes)
+        // If not, we reserve MAX_REP_LENGTH (516) bytes for chunk concatenation.
+        let end_limit = if is_final {
+            self.state.work_bytes
+        } else {
+            self.state.work_bytes.saturating_sub(super::MAX_REP_LENGTH)
+        };
 
-        while pos < self.state.work_bytes.saturating_sub(1) {
-            // Try to find a repetition at current position
-            let match_result = self.state.find_repetition(pos);
+        while self.state.work_pos < end_limit {
+            let match_result = self.state.find_repetition(self.state.work_pos);
 
             if match_result.is_match() {
-                // Encode the match
                 self.encode_match(match_result)?;
-                pos += match_result.length;
+                self.state.work_pos += match_result.length;
             } else {
-                // Encode literal byte
-                self.encode_literal(self.state.work_buff[pos])?;
-                pos += 1;
+                self.encode_literal(self.state.work_buff[self.state.work_pos])?;
+                self.state.work_pos += 1;
             }
-        }
-
-        // Handle last byte if any
-        if pos < self.state.work_bytes {
-            self.encode_literal(self.state.work_buff[pos])?;
         }
 
         Ok(())
@@ -303,6 +316,15 @@ impl<W: Write> ImplodeWriter<W> {
         if !self.input_buffer.is_empty() {
             self.process_input()?;
         }
+
+        // We're compressing everything remaining in `work_buff`
+        if self.state.work_pos < self.state.work_bytes {
+            if self.state.work_bytes > 1 {
+                self.state.sort_buffer(0, self.state.work_bytes);
+            }
+            self.compress_buffer(true)?;
+        }
+
         Ok(())
     }
 }

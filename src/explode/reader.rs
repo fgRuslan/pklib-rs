@@ -184,7 +184,6 @@ impl<R: Read> ExplodeReader<R> {
         }
 
         let mut bytes_written = 0;
-        self.state.output_pos = 0x1000; // Initialize output buffer position
 
         // Main decompression loop
         loop {
@@ -268,7 +267,7 @@ impl<R: Read> ExplodeReader<R> {
 
                 // Move remaining data to first half (for repetition references)
                 let remaining_bytes = self.state.output_pos - 0x1000;
-                if remaining_bytes > 0 && remaining_bytes <= 0x1000 {
+                if remaining_bytes > 0 {
                     self.state
                         .out_buff
                         .copy_within(0x1000..self.state.output_pos, 0);
