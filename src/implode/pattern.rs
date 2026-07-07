@@ -45,25 +45,10 @@ impl ImplodeState {
         }
 
         let hash = byte_pair_hash(&self.work_buff[input_pos..input_pos + 2]);
-        let min_offset = input_pos.saturating_sub(self.dsize_bytes as usize);
-
-        // Get all positions where this byte pair hash occurs
-        let positions = self.find_hash_positions(hash, input_pos);
-        if positions.is_empty() {
-            return MatchResult::no_match();
-        }
-
         let mut best_match = MatchResult::no_match();
         let max_length = (self.work_bytes - input_pos).min(MAX_REP_LENGTH);
 
-        // Check each potential match position
-        for &match_pos in &positions {
-            // Skip if the position is too close or beyond our dictionary window
-            if match_pos >= input_pos || match_pos < min_offset {
-                continue;
-            }
-
-            // Calculate distance
+        for match_pos in self.find_hash_positions(hash, input_pos) {
             let distance = input_pos - match_pos;
 
             // For very close repetitions (distance 1), we need special handling
@@ -176,19 +161,13 @@ impl ImplodeState {
             return current_best;
         }
 
-        // Look for potentially better matches at different positions
         let hash = byte_pair_hash(&self.work_buff[input_pos..input_pos + 2]);
-        let positions = self.find_hash_positions(hash, input_pos);
-
         let mut best_match = current_best;
         let max_length = (self.work_bytes - input_pos).min(MAX_REP_LENGTH);
 
-        // Check if there's a longer match at a different position
-        for &match_pos in &positions {
-            if match_pos >= input_pos {
-                continue;
-            }
-
+        let positions: Vec<_> = self.find_hash_positions(hash, input_pos).collect();
+        
+        for match_pos in positions {
             let distance = input_pos - match_pos;
             if distance == best_match.distance {
                 continue; // Same match we already found

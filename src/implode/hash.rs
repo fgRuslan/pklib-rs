@@ -85,29 +85,16 @@ impl ImplodeState {
     }
 
     /// Find all positions where a specific byte pair hash occurs
-    pub fn find_hash_positions(&self, hash: usize, current_pos: usize) -> Vec<usize> {
-        let mut positions = Vec::new();
+    pub fn find_hash_positions(&self, hash: usize, current_pos: usize) -> impl Iterator<Item = usize> + '_ {
+        let start_index = self.get_hash_index(hash).unwrap_or(self.phash_offs.len());
+        let min_offset = current_pos.saturating_sub(self.dsize_bytes as usize);
 
-        if let Some(start_index) = self.get_hash_index(hash) {
-            let min_offset = current_pos.saturating_sub(self.dsize_bytes as usize);
-
-            // Walk through all occurrences of this hash
-            for i in start_index..self.phash_offs.len() {
-                if let Some(offset) = self.get_hash_offset(i) {
-                    // Check if this offset is within our dictionary window
-                    if offset >= min_offset && offset < current_pos {
-                        positions.push(offset);
-                    } else if offset >= current_pos {
-                        // Offsets are sorted, so we can stop here
-                        break;
-                    }
-                } else {
-                    break; // No more valid offsets
-                }
-            }
+        HashPositionsIter {
+            phash_offs: &self.phash_offs,
+            current_index: start_index,
+            min_offset,
+            current_pos,
         }
-
-        positions
     }
 
     /// Update hash table incrementally for a new byte pair
@@ -152,6 +139,37 @@ impl ImplodeState {
     }
 }
 
+/// Lazy iterator to search hashes
+pub struct HashPositionsIter<'a> {
+    phash_offs: &'a [u16],
+    current_index: usize,
+    min_offset: usize,
+    current_pos: usize,
+}
+
+impl<'a> Iterator for HashPositionsIter<'a> {
+    type Item = usize;
+
+    #[inline]
+    fn next(&mut self) -> Option<Self::Item> {
+        while self.current_index < self.phash_offs.len() {
+            let offset = self.phash_offs[self.current_index] as usize;
+            self.current_index += 1;
+
+            if offset == 0 {
+                return None;
+            }
+            if offset >= self.current_pos {
+                return None;
+            }
+            if offset >= self.min_offset {
+                return Some(offset);
+            }
+        }
+        None
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -184,7 +202,7 @@ mod tests {
 
         // Verify we can find positions
         let positions = state.find_hash_positions(hash_ab, len);
-        assert!(!positions.is_empty());
+        assert!(!positions.count() == 0);
     }
 
     #[test]
